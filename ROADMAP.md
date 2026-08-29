@@ -5,29 +5,110 @@ Goal: Pancha autonomously collects scattered toys around the house and places th
 This is a multi-phase integration project (RL skills + computer vision + navigation/orchestration),
 not a single trainable "skill". Phases are ordered by dependency; each is independently useful.
 
-## Phase 1 — Grasp & lift (RL, sim) — NOT YET STARTED
+## Phase 1 — Grasp & lift (RL, sim) — DONE in sim (trained + video-reviewed)
 
 Crouch, close the beak on a small light object, lift head back to standing while holding it.
 
-- Needs a new graspable object entity in the sim scene (like `ball_kick`'s ball), spawned near
-  `mouth_tip`.
-- Needs a *real* grasp mechanism: today's `ground_pick`/`apply_mouth_payload_force` only applies
-  a simulated payload force (10-40g) during the return phase — there is no actual attach/weld
-  constraint or graspable body anywhere in `microduck_rl`. This has to be built from scratch.
-- 10-40g is very light for an 800g robot — many dog toys (50-200g+) may exceed what the neck/body
-  can compensate for while balancing. Real payload limits need validating in sim first.
-- Estimated effort: ~1-2 weeks of reward-design iteration (per `AGENTS.md`'s "2-5 iterations of
-  reward-hacking whack-a-mole" pattern).
+Implemented as the `Mjlab-GraspLift-Flat-MicroDuck` task in `microduck_rl`, trained to
+**100 % grasp-and-lift** in sim (64/64 eval episodes, mean lift 21.4 cm to beak height).
+
+- **Graspable object**: `robot/microduck/toy.xml` — a 30x30x24 mm, 30 g block. A box, not
+  a ball: a rolling prop escapes the beak on first touch, which turns "grasp" into
+  "chase". Spawns at x = 80 +/- 20 mm in the robot's yaw frame.
+- **The grasp is a real weld.** The Microduck has NO jaw servo (its 14 joints are 5+5
+  leg and 4 neck/head, and the beak geoms are rigidly fixed to the head), so "closing
+  the beak" is not an action. The grasp is a latched `mjEQ_WELD` equality between the
+  head and the toy, installed inactive at compile time and switched on per-env when the
+  beak actually closes on the toy: real contact + mouth within 35 mm + mouth pointing
+  down + low relative speed. The speed gate is what stops a fast head slam from
+  counting as a grasp.
+- **Payload limits, measured** (`scripts/payload_sweep.py`, CPU, no GPU needed):
+  servo torque is *not* the binding constraint — even a 200 g payload needs only 26 %
+  of the XL330's stall torque at the neck. What binds is BALANCE: an 80 g toy drags the
+  whole-body CoM 8.2 mm forward, 18 % of the 46 mm sole the robot must keep its weight
+  over. Training therefore randomizes the toy over 10–80 g rather than jumping to
+  dog-toy masses.
+- Validated on CPU end-to-end: the weld holds the toy to within ~1 mm, releases cleanly,
+  `eq_data` expands per-world, the 61 D obs contract is preserved, every penalty term is
+  <= 0, and a 5-iteration / 64-env HF Jobs smoke test completes.
+
+### Training result (3000 iters, 4096 envs, ~1h50 on l4x1, first attempt)
+
+The grasp emerged around iteration 200 and went 0 % -> 84 % in ~150 iterations, then held
+94-98 % for the rest of the run. No reward-hacking iterations were needed.
+
+| | iter 0 | iter 354 | iter 2132 |
+|---|---|---|---|
+| grasp rate | 0 % | 84 % | 95 % |
+| falls (`fell_over`) | 12.12 | 0.29 | 0.08 |
+| `dof_pos_limits` | -0.000 | -0.146 | -0.018 |
+| `head_impact_penalty` | -0.0005 | -0.043 | -0.008 |
+
+Two failure modes appeared mid-run and resolved themselves as the policy refined: joints
+parking near their limits (peaked at iter ~350, then fell 8x) and the beak scuffing the
+floor on descent (peaked at iter ~354, then fell 5x). Neither needed the `AGENTS.md`
+limit-proximity fix.
+
+Rollout eval of `model_2999` (64 envs, play cfg with pushes enabled): **64/64 episodes
+grasped and lifted the toy >5 cm**, mean lift 21.4 cm (median 21.4, max 24.0) — i.e. the
+toy goes from the floor to standing beak height. Artifacts:
+[checkpoints + `exported/policy.onnx`](https://huggingface.co/Pablooooooooo/mjlab-grasplift-flat-microduck-20260828-225507).
+
+Still open: nobody has *watched* a rollout. Sim metrics can pass while the video fails the
+human eye, so a play-video review is the remaining gate before calling the skill good.
+
+**Video reviewed and passed** ([recording](https://github.com/user-attachments/assets/65d89d42-52fc-4d8a-b67f-e86c868edf5d)):
+stand -> deep crouch with the beak to the floor -> latch -> smooth rise -> stand holding the
+block at beak tip, feet planted throughout. Two observations from watching it:
+
+- The block is held **against** the beak tip, not enclosed in it. With no jaw servo that is
+  the correct sim outcome (the weld latches where the beak contacts), but "can the beak grip
+  vs merely nudge" stays a real-hardware question — see Phase 6.
+- The grasp fires around phase 0.27, i.e. during the DESCENT, not in the dedicated hold
+  window (0.375-0.45). The latch is not phase-gated by design, so the policy grabs as soon as
+  it legitimately can. The gate works, but the hold segment earns less than the phase profile
+  assumed and could be shortened in a revision.
 
 ## Phase 2 — Carry while walking (RL, sim) — depends on Phase 1
 
 Combine the held object from Phase 1 with the walking gait (`Mjlab-Velocity`). Balance changes
 with an off-center held mass swinging near the head during locomotion.
 
+### Handoff notes (written while building Phase 1 — read before starting)
+
+**The twist command slot collides.** Phase 1 encodes the pick phase in the twist slot as
+`[cos(2*pi*phi), sin(2*pi*phi), 0]` (`GroundPickPhaseCommand`), but Phase 2 needs that same
+slot for real velocity commands. The 61 D obs contract is shared across the whole policy
+family and slots cannot be added, so **Phase 2 cannot reuse Phase 1's phase machinery**.
+
+The design that falls out of that:
+
+- **Spawn the toy already held.** Activate the weld at reset (`eq_active` on from step 0) and
+  skip the latch entirely — Phase 2 is about carrying, not acquiring. `mdp.reset_grasp`
+  already releases and clears state; the mirror-image "attach at reset" is a few lines using
+  the same `eq_data` maths as `update_grasp_latch`.
+- **Base on `make_microduck_velocity_env_cfg`, not ground_pick.** Phase 2 is the walking
+  recipe plus a payload, so it should inherit the gait rewards, not the phased pick stack.
+- **The real difficulty is the CoM coupling.** The payload sweep measured a static 8.2 mm CoM
+  shift at 80 g (18 % of the sole); walking makes that a *dynamic* disturbance on a head that
+  is already 38 % of body mass and must oscillate. `AGENTS.md` has a directly relevant lesson:
+  a tight instantaneous head-tracking std once taxed walking so hard the policy stood still —
+  price only the escapable part (e.g. L1 on a 1 s EMA).
+- Keep `mdp.update_grasp_latch` registered but consider raising its gates, or omit it, so the
+  policy cannot re-grab a dropped toy mid-episode and mask a failure to carry.
+
 ## Phase 3 — Release on command (RL, sim) — depends on Phase 1
 
 Small episodic skill: open beak, dip head, drop the object. Similar scale/difficulty to
 `standup`/`ground_pick`.
+
+### Handoff notes
+
+`mdp.release_grasp(env, env_ids)` already exists and is the counterpart to the Phase 1 latch —
+it deactivates the weld and clears the held flag. Phase 3 is therefore mostly reward design
+plus a command to trigger it, not new mechanism work. Note the beak cannot open (no jaw
+servo), so "release" is deactivating the weld at a chosen moment; the reward has to make the
+policy dip and aim first, since dropping from a standing pose scatters the toy.
 
 ## Phase 4 — Perception (NOT RL — computer vision) — independent, can start anytime
 
@@ -56,7 +137,7 @@ project.
 
 ## Status
 
-- [ ] Phase 1 — Grasp & lift (#1)
+- [x] Phase 1 — Grasp & lift (#1) — trained & video-reviewed, 100% grasp+lift in sim
 - [ ] Phase 2 — Carry while walking (#2)
 - [ ] Phase 3 — Release on command (#3)
 - [ ] Phase 4 — Perception (#4)
