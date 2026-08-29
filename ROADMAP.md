@@ -107,11 +107,22 @@ small additive change.
   without. This is the reset-side mirror of the Phase 1 sensor-staleness trap.
 - Validated on CPU: toy welded at the beak from step 0, held to <0.1 mm through 40 steps of
   random actions, 61 D actor obs preserved, `eq_data` expanded per-world, all rewards finite,
-  NaN-free.
+  NaN-free. A 5-iteration / 64-env HF Jobs smoke test completes with every penalty <= 0.
+- **First measured payload numbers** (smoke test, untrained policy, so a baseline rather than a
+  result): `carried_toy_accel` ~10.3 m/s^2 mean, `carried_toy_grip_force` 0.42-0.52 N against a
+  0.38 N static weight. The `PAYLOAD_FREE_ACCEL` = 30 m/s^2 guard rail therefore sits ~3x above
+  current payload motion and is nearly inert (`payload_violence` = -0.0001), which is what a
+  backstop should be — re-set it from the trained distribution.
 - 17 new tests, **17/17 mutation-checked**. Mutation testing found two real holes: the toy-mass
   DR test derived its expectation from the same constant it was checking (tautological), and an
   `isinstance` check on the twist command was near-vacuous because `GroundPickPhaseCommandCfg`
   *subclasses* `UniformVelocityCommandCfg`.
+- **The first smoke test caught a third bug the tests had missed**: both payload metrics were
+  dead, always reading zero. mjlab computes rewards *before* metrics, and all three payload
+  terms differenced one shared previous-velocity buffer, so the penalty consumed it and the
+  metrics measured `vel - vel`. `carried_toy_grip_force` read exactly (mean toy mass) x g —
+  static weight, dynamic term missing, and it looked like a healthy number. Fixed with a
+  per-step shared cache; the suite is now 18 tests, 18/18 mutations caught.
 
 Still open: nothing has been trained. Next step is a full run, then a play-video review — the
 same gate Phase 1 had to pass.
