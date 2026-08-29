@@ -49,3 +49,27 @@ timeout caps worst-case cost at ~$9.60.
 ## Current status
 
 See the "Toy pickup & basket delivery" milestone: https://github.com/pvillagomez/pancha/milestone/1
+
+Phase 1 (grasp & lift) is **done in sim**: trained to 100 % grasp-and-lift and video-reviewed.
+Phases 2 and 3 are unblocked and both have **handoff notes in `ROADMAP.md`** written while
+Phase 1 was built — read those before starting either, they record design constraints that are
+not obvious from the code (most importantly: Phase 2 cannot reuse Phase 1's phase command,
+because both need the same twist slot).
+
+## Picking up work in a new session
+
+Read in this order:
+
+1. `ROADMAP.md` — phase status, measured numbers, and per-phase handoff notes.
+2. `microduck_rl/AGENTS.md` — the RL conventions, including the grasp-weld pattern and its
+   two traps (`eq_data` must be expanded per-world; sensor data refreshes on `scene.update()`,
+   not `sim.forward()`).
+3. `microduck_rl/src/mjlab_microduck/tasks/microduck_grasp_lift_env_cfg.py` — its module
+   docstring carries every task constant together with how it was measured.
+
+Re-derive rather than trust prose if the robot model is ever re-exported:
+`uv run python scripts/payload_sweep.py` re-measures payload limits on CPU in seconds, and
+`tests/test_grasp_lift_cfg.py::test_toy_fits_the_measured_mouth_reach` fails loudly if a new
+model puts the toy outside the beak's reach.
+
+Open work is tracked as GitHub issues #1-#6, one per phase, each linked to the milestone.
