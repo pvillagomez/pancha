@@ -69,12 +69,54 @@ block at beak tip, feet planted throughout. Two observations from watching it:
   it legitimately can. The gate works, but the hold segment earns less than the phase profile
   assumed and could be shortened in a revision.
 
-## Phase 2 — Carry while walking (RL, sim) — depends on Phase 1
+## Phase 2 — Carry while walking (RL, sim) — IMPLEMENTED in sim, not yet trained
 
 Combine the held object from Phase 1 with the walking gait (`Mjlab-Velocity`). Balance changes
 with an off-center held mass swinging near the head during locomotion.
 
-### Handoff notes (written while building Phase 1 — read before starting)
+Implemented as the `Mjlab-Carry-Flat-MicroDuck` task in `microduck_rl` (+ a `-Backlash-` twin),
+built on `make_microduck_velocity_env_cfg`. Validated on CPU; **not yet trained**.
+
+**It is a perfect-grip upper bound, by design.** A MuJoCo `mjEQ_WELD` does not break, so with
+the toy welded from step 0 and no latch, it *cannot be dropped* — a 100 % carry rate is
+guaranteed by construction rather than earned, and the task is really "walk with 10–80 g of
+extra beak mass". That isolates the difficulty the handoff flagged (CoM coupling) and avoids
+inventing a beak grip-strength threshold, which is unknowable until hardware (Phase 6).
+Instead `carried_toy_grip_force` logs the force the weld actually supplies, so a measured grip
+strength can later be compared against a real distribution. A breakable-grip variant is then a
+small additive change.
+
+- **Carry pose, measured** (`scripts/carry_sweep.py`, CPU): in the head frame +X is world up
+  and −Z is world forward; `mouth_tip` sits at (−8.09, 0, −77.74) mm. Sweeping the toy down
+  from there, interpenetration with the head collision mesh reaches zero at **25 mm** below the
+  beak tip (24 mm still overlaps 0.35 mm; centring it on `mouth_tip` overlaps 12.5 mm). That is
+  the carry analogue of where Phase 1's latch fired, since Phase 1 welded on *contact*.
+- **CoM coupling, measured at that pose**: 0.9 mm at 10 g, 2.7 mm at 30 g, **6.7 mm at 80 g
+  (14.5 % of the 46 mm sole)** — *gentler* than Phase 1's 8.2 mm, because the toy hangs closer
+  to the body than wherever the latch happened to catch it. The static shift is not the hard
+  part; walking makes it dynamic.
+- **The head-tracking lesson needed no new work.** The velocity recipe already implements
+  AGENTS.md's fix (`head_pose_bias_penalty`: L1 on a 1 s EMA, curriculum-ramped), which prices
+  the escapable DC droop and lets the unavoidable oscillation cancel. Building on velocity
+  inherits it. Do *not* fix a droop symptom by tightening `head_pose_tracking`.
+- **A new trap, found and guarded.** mjlab fires `reset` events *before* the `forward()` at the
+  end of `step`, and the head is not the root body — so its `xpos` during a reset event is
+  still the **previous episode's**. Placing the toy off an unrefreshed head pose spawns it
+  metres from the beak while `eq_active`, the held flag, NaN guards and rewards all still look
+  healthy. Measured: **0.00006 mm** placement error with the kinematics refresh, **1836 mm**
+  without. This is the reset-side mirror of the Phase 1 sensor-staleness trap.
+- Validated on CPU: toy welded at the beak from step 0, held to <0.1 mm through 40 steps of
+  random actions, 61 D actor obs preserved, `eq_data` expanded per-world, all rewards finite,
+  NaN-free.
+- 17 new tests, **17/17 mutation-checked**. Mutation testing found two real holes: the toy-mass
+  DR test derived its expectation from the same constant it was checking (tautological), and an
+  `isinstance` check on the twist command was near-vacuous because `GroundPickPhaseCommandCfg`
+  *subclasses* `UniformVelocityCommandCfg`.
+
+Still open: nothing has been trained. Next step is a full run, then a play-video review — the
+same gate Phase 1 had to pass.
+
+### Handoff notes (written while building Phase 1 — kept for context)
 
 **The twist command slot collides.** Phase 1 encodes the pick phase in the twist slot as
 `[cos(2*pi*phi), sin(2*pi*phi), 0]` (`GroundPickPhaseCommand`), but Phase 2 needs that same
@@ -96,6 +138,8 @@ The design that falls out of that:
   price only the escapable part (e.g. L1 on a 1 s EMA).
 - Keep `mdp.update_grasp_latch` registered but consider raising its gates, or omit it, so the
   policy cannot re-grab a dropped toy mid-episode and mask a failure to carry.
+  *(Resolved: omitted. And moot in the other direction — a weld cannot break, so there is no
+  drop to mask.)*
 
 ## Phase 3 — Release on command (RL, sim) — depends on Phase 1
 
@@ -138,7 +182,7 @@ project.
 ## Status
 
 - [x] Phase 1 — Grasp & lift (#1) — trained & video-reviewed, 100% grasp+lift in sim
-- [ ] Phase 2 — Carry while walking (#2)
+- [ ] Phase 2 — Carry while walking (#2) — task implemented & CPU-validated, not yet trained
 - [ ] Phase 3 — Release on command (#3)
 - [ ] Phase 4 — Perception (#4)
 - [ ] Phase 5 — Navigation / orchestration (#5)
