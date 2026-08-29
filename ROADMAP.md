@@ -5,11 +5,12 @@ Goal: Pancha autonomously collects scattered toys around the house and places th
 This is a multi-phase integration project (RL skills + computer vision + navigation/orchestration),
 not a single trainable "skill". Phases are ordered by dependency; each is independently useful.
 
-## Phase 1 — Grasp & lift (RL, sim) — ENV BUILT, NOT YET TRAINED
+## Phase 1 — Grasp & lift (RL, sim) — TRAINED, sim-complete
 
 Crouch, close the beak on a small light object, lift head back to standing while holding it.
 
-Implemented as the `Mjlab-GraspLift-Flat-MicroDuck` task in `microduck_rl`:
+Implemented as the `Mjlab-GraspLift-Flat-MicroDuck` task in `microduck_rl`, trained to
+**100 % grasp-and-lift** in sim (64/64 eval episodes, mean lift 21.4 cm to beak height).
 
 - **Graspable object**: `robot/microduck/toy.xml` — a 30x30x24 mm, 30 g block. A box, not
   a ball: a rolling prop escapes the beak on first touch, which turns "grasp" into
@@ -31,8 +32,30 @@ Implemented as the `Mjlab-GraspLift-Flat-MicroDuck` task in `microduck_rl`:
   `eq_data` expands per-world, the 61 D obs contract is preserved, every penalty term is
   <= 0, and a 5-iteration / 64-env HF Jobs smoke test completes.
 
-Remaining: the actual training run, and the 2-5 iterations of reward-hacking
-whack-a-mole that go with it.
+### Training result (3000 iters, 4096 envs, ~1h50 on l4x1, first attempt)
+
+The grasp emerged around iteration 200 and went 0 % -> 84 % in ~150 iterations, then held
+94-98 % for the rest of the run. No reward-hacking iterations were needed.
+
+| | iter 0 | iter 354 | iter 2132 |
+|---|---|---|---|
+| grasp rate | 0 % | 84 % | 95 % |
+| falls (`fell_over`) | 12.12 | 0.29 | 0.08 |
+| `dof_pos_limits` | -0.000 | -0.146 | -0.018 |
+| `head_impact_penalty` | -0.0005 | -0.043 | -0.008 |
+
+Two failure modes appeared mid-run and resolved themselves as the policy refined: joints
+parking near their limits (peaked at iter ~350, then fell 8x) and the beak scuffing the
+floor on descent (peaked at iter ~354, then fell 5x). Neither needed the `AGENTS.md`
+limit-proximity fix.
+
+Rollout eval of `model_2999` (64 envs, play cfg with pushes enabled): **64/64 episodes
+grasped and lifted the toy >5 cm**, mean lift 21.4 cm (median 21.4, max 24.0) — i.e. the
+toy goes from the floor to standing beak height. Artifacts:
+[checkpoints + `exported/policy.onnx`](https://huggingface.co/Pablooooooooo/mjlab-grasplift-flat-microduck-20260828-225507).
+
+Still open: nobody has *watched* a rollout. Sim metrics can pass while the video fails the
+human eye, so a play-video review is the remaining gate before calling the skill good.
 
 ## Phase 2 — Carry while walking (RL, sim) — depends on Phase 1
 
@@ -71,7 +94,7 @@ project.
 
 ## Status
 
-- [~] Phase 1 — Grasp & lift (#1) — env + weld grasp built and validated; training pending
+- [x] Phase 1 — Grasp & lift (#1) — trained, 100% grasp+lift in sim; pending video review
 - [ ] Phase 2 — Carry while walking (#2)
 - [ ] Phase 3 — Release on command (#3)
 - [ ] Phase 4 — Perception (#4)
