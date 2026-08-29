@@ -56,9 +56,9 @@ project.
 
 ## Status
 
-- [ ] Phase 1 — Grasp & lift
-- [ ] Phase 2 — Carry while walking
-- [ ] Phase 3 — Release on command
-- [ ] Phase 4 — Perception
-- [ ] Phase 5 — Navigation / orchestration
-- [ ] Phase 6 — Real hardware validation
+- [ ] Phase 1 — Grasp & lift (#1)
+- [ ] Phase 2 — Carry while walking (#2)
+- [ ] Phase 3 — Release on command (#3)
+- [ ] Phase 4 — Perception (#4)
+- [ ] Phase 5 — Navigation / orchestration (#5)
+- [ ] Phase 6 — Real hardware validation (#6)
